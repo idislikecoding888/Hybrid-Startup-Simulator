@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+pydantic
+groq
+python-dotenv
+stable-baselines3==2.8.0
+torch
+gymnasium
+numpy
