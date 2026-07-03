@@ -1,23 +1,37 @@
 from backend.state.state_schema import SimulationState
 
 
+def _pick(value, fallback):
+    """
+    Safe fallback that does not treat 0 as missing.
+    """
+    return fallback if value is None else value
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, float(value)))
+
+
 def apply_market_dynamics(state: SimulationState, decision: dict) -> SimulationState:
     """
-    Applies decision to the environment and returns updated state
+    Applies decision to the environment and returns updated state.
+    This version is defensive: it handles missing keys, None values,
+    and keeps all decision variables inside valid ranges.
     """
+    decision = decision or {}
 
     # --- Safe extraction with fallback ---
-    price = decision.get("price") or state.product.price or 500
-    quality = decision.get("quality") or state.product.quality or 0.5
-    marketing_budget = decision.get("marketing_budget") or state.marketing.budget or 1000
+    price = _pick(decision.get("price"), state.product.price if state.product.price is not None else 500)
+    quality = _pick(decision.get("quality"), state.product.quality if state.product.quality is not None else 0.5)
+    marketing_budget = _pick(
+        decision.get("marketing_budget"),
+        state.marketing.budget if state.marketing.budget is not None else 1000,
+    )
 
-    # --- HARD GUARD (critical) ---
-    if quality is None:
-        quality = 0.5
-    if price is None:
-        price = 500
-    if marketing_budget is None:
-        marketing_budget = 1000
+    # --- Enforce safe ranges ---
+    price = _clamp(price, 100, 2000)
+    quality = _clamp(quality, 0.1, 1.0)
+    marketing_budget = _clamp(marketing_budget, 100, 5000)
 
     # --- Update product ---
     state.product.price = price
@@ -25,7 +39,6 @@ def apply_market_dynamics(state: SimulationState, decision: dict) -> SimulationS
 
     # --- Marketing effects ---
     from backend.environment.marketing_model import apply_marketing
-
     state, reach, conversion_rate = apply_marketing(state, marketing_budget)
 
     new_customers = int(reach * conversion_rate)

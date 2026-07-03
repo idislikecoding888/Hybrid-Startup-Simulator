@@ -1,22 +1,16 @@
-# backend/hybrid/state_encoder.py
 #
 # Encodes a SimulationState into the 11-dim observation vector expected by
-# the supplied PPO checkpoint. The checkpoint's observation_space is
-# Box(low=0, high=1e6, shape=(11,)) which lines up 1:1 with the 11 numeric
-# fields already present in SimulationState (state_schema.py):
+# the supplied PPO checkpoint.
 #
+# Observation order:
 #   [price, quality, budget, reach, conversion_rate,
 #    total_customers, active_customers, satisfaction,
 #    cash, revenue, expenses]
 #
-# This ordering is an engineering assumption (no training script was
-# supplied with the checkpoint) but it is the natural/only 11-field vector
-# this simulator exposes, and the action space (Box(3) in [0,1]) maps
-# cleanly onto this simulator's 3 decision variables (price, quality,
-# marketing_budget) -- strong evidence the checkpoint was trained on this
-# same schema.
+# This is kept raw on purpose because the checkpoint was already trained
+# against this simulator schema.
 
-from typing import List
+from typing import Any, List
 import numpy as np
 
 FEATURE_ORDER = [
@@ -28,22 +22,45 @@ FEATURE_ORDER = [
 OBS_HIGH = 1_000_000.0
 
 
+def _get_value(obj: Any, path: List[str], default: float = 0.0) -> float:
+    current = obj
+    for key in path:
+        if current is None:
+            return default
+        if isinstance(current, dict):
+            current = current.get(key, default)
+        else:
+            current = getattr(current, key, default)
+
+    try:
+        value = float(current)
+    except (TypeError, ValueError):
+        return default
+
+    if not np.isfinite(value):
+        return default
+
+    return value
+
+
 def encode_state(state) -> np.ndarray:
     """SimulationState -> np.float32[11], clipped to the checkpoint's obs bounds."""
     values = [
-        state.product.price,
-        state.product.quality,
-        state.marketing.budget,
-        state.marketing.reach,
-        state.marketing.conversion_rate,
-        state.customers.total_customers,
-        state.customers.active_customers,
-        state.customers.satisfaction,
-        state.finance.cash,
-        state.finance.revenue,
-        state.finance.expenses,
+        _get_value(state, ["product", "price"]),
+        _get_value(state, ["product", "quality"]),
+        _get_value(state, ["marketing", "budget"]),
+        _get_value(state, ["marketing", "reach"]),
+        _get_value(state, ["marketing", "conversion_rate"]),
+        _get_value(state, ["customers", "total_customers"]),
+        _get_value(state, ["customers", "active_customers"]),
+        _get_value(state, ["customers", "satisfaction"]),
+        _get_value(state, ["finance", "cash"]),
+        _get_value(state, ["finance", "revenue"]),
+        _get_value(state, ["finance", "expenses"]),
     ]
-    arr = np.array(values, dtype=np.float32)
+
+    arr = np.asarray(values, dtype=np.float32)
+    arr = np.nan_to_num(arr, nan=0.0, posinf=OBS_HIGH, neginf=0.0)
     return np.clip(arr, 0.0, OBS_HIGH)
 
 

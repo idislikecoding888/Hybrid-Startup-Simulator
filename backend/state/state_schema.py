@@ -41,6 +41,6 @@ class SimulationState(BaseModel):
     customers: CustomerState
     finance: FinanceState
     decisions: DecisionState
-    inventory: dict = {}
+    inventory: dict = Field(default_factory=dict)
 
     history: List[Dict] = Field(default_factory=list)
