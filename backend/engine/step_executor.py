@@ -12,6 +12,7 @@ class StepExecutor:
         self._logs_repo = LogsRepository()
 
     def _store_agent_decisions(self, state, deliberation_output):
+        
         """
         Persist the latest agent proposals into state.decisions so the UI
         and history can inspect them later.
@@ -35,6 +36,27 @@ class StepExecutor:
         state.decisions.last_founder_decision = agent_map.get("founder", {})
         state.decisions.last_marketing_decision = agent_map.get("marketing", {})
         state.decisions.last_investor_decision = agent_map.get("investor", {})
+    def _update_hybrid_reputation(self, state):
+            """
+            Update reputation after the completed step has been recorded.
+            Tries a few likely locations for the hybrid engine so this stays
+            robust across wrapper/service layouts.
+            """
+            candidates = [
+                self.deliberation_service,
+                getattr(self.deliberation_service, "engine", None),
+                getattr(self.deliberation_service, "hybrid_engine", None),
+                getattr(self.deliberation_service, "deliberation_engine", None),
+            ]
+
+            for candidate in candidates:
+                updater = getattr(candidate, "_update_reputation_from_previous_step", None)
+                if callable(updater):
+                    try:
+                        updater(state)
+                    except Exception:
+                        pass
+                    return
 
     def execute_step(self, state):
         """
@@ -75,13 +97,19 @@ class StepExecutor:
             "reward_breakdown": reward["components"],
             "deliberation": {
                 "weights": deliberation_output.get("weights", {}),
+                "proposal_ranking": deliberation_output.get("proposal_ranking", []),
+                "selected_agent": deliberation_output.get("selected_agent"),
+                "trust_scores": deliberation_output.get("trust_scores", {}),
+                "agent_stats": deliberation_output.get("agent_stats", {}),
                 "ppo_available": deliberation_output.get("ppo_available", False),
                 "ppo_reference_decision": deliberation_output.get("ppo_reference_decision"),
                 "ppo_value_estimate": deliberation_output.get("ppo_value_estimate"),
             },
         })
+            # 7. Update hybrid memory/reputation after the step is fully recorded
+        self._update_hybrid_reputation(new_state)
 
-        # 7. Increment step
+            # 8. Increment step
         new_state.step += 1
 
         return new_state, deliberation_output, metrics

@@ -10,40 +10,42 @@ class FounderAgent(BaseAgent):
         )
 
     def build_prompt(self, state: SimulationState, context=None) -> str:
-        board_snapshot = ""
-        last_step_summary = ""
+        live_state_json = ""
+        last_step_summary_json = ""
+        debate_so_far = "[]"
+
         if context and isinstance(context, dict):
-            board_snapshot = context.get("board_snapshot", "")
-            last_step_summary = context.get("last_step_summary", "")
+            live_state_json = context.get("live_state_json", "")
+            last_step_summary_json = context.get("last_step_summary_json", "")
+            debate_so_far = context.get("debate_so_far", []) or []
+            debate_so_far = __import__("json").dumps(debate_so_far, ensure_ascii=False)
 
         return f"""
-You are the Founder and CEO of a startup in a live board meeting.
+You are the Founder and CEO in a live startup board meeting.
 
-You are not a neutral assistant. You are the person accountable for growth, survival, brand, and long-term upside.
-Speak like a real founder with authority: decisive, opinionated, pragmatic, and willing to take heat for the call.
-Your reasoning must sound human, like a founder defending a hard decision to investors and operators.
+You must act like a real founder: decisive, accountable, opinionated, and strategic.
+Do not sound generic. Do not sound like a bot. Speak like someone defending the company's future under pressure.
 
-IMPORTANT STATE RULES:
-- Use ONLY the current board snapshot below.
-- Do NOT repeat old seed-state assumptions like "zero revenue" unless the snapshot actually says that.
-- Do NOT invent numbers.
-- If you mention cash, revenue, customers, price, quality, or inventory, they must match the snapshot exactly.
+GROUNDED INPUTS:
+LIVE_STATE_JSON = {live_state_json}
+LAST_STEP_SUMMARY_JSON = {last_step_summary_json}
+DEBATE_SO_FAR_JSON = {debate_so_far}
 
-Board Snapshot:
-{board_snapshot}
-
-{last_step_summary}
+Rules:
+- Use only the values in LIVE_STATE_JSON and LAST_STEP_SUMMARY_JSON.
+- Do NOT invent old launch-state numbers.
+- If you mention cash, revenue, customers, price, quality, or inventory, they must match LIVE_STATE_JSON exactly.
+- Your reasoning should sound like a founder responding to the current board discussion.
+- If prior agents already spoke, explicitly respond to them in your reasoning.
+- Mention at least two exact current numbers from LIVE_STATE_JSON.
+- If inventory is low, admit the constraint.
+- If customers are strong, defend pricing power.
+- If satisfaction is weak, argue for quality.
+- Keep it realistic and human.
 
 Decision focus:
 - price (300–1000)
 - quality (0.3–1.0)
-
-Reasoning style:
-- Mention at least two exact current numbers from the snapshot.
-- If inventory is tight, acknowledge the constraint.
-- If demand is strong, justify a higher price.
-- If satisfaction is weak, argue for better quality.
-- Briefly anticipate one objection from a skeptical investor or operator.
 
 Return ONLY JSON in this format:
 {{

@@ -7,17 +7,17 @@ from backend.config import settings
 
 load_dotenv()
 
-# Strip accidental quotes/whitespace from .env values
 _raw_key = os.getenv("GROQ_API_KEY", "")
 GROQ_API_KEY = _raw_key.strip().strip('"').strip("'")
 
 client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 SYSTEM_PROMPT = (
-    "You are one executive in a startup board meeting. "
-    "You must return ONLY valid JSON. No markdown, no code fences, no extra text. "
-    "Be concise, realistic, and business-minded. "
-    "Your reasoning should sound like a real human decision-maker, not a template."
+    "You are an executive in a startup board meeting. "
+    "Use only the supplied live state and debate context. "
+    "Return ONLY valid JSON. No markdown, no code fences, no extra text. "
+    "If the prompt provides exact numbers, treat them as ground truth. "
+    "Never invent launch-state numbers or stale examples."
 )
 
 def call_llm(prompt: str) -> str:
@@ -50,12 +50,12 @@ def call_llm(prompt: str) -> str:
             content = completion.choices[0].message.content or ""
             return content.strip()
 
-        except Exception as e:
-            last_error = e
+        except Exception as exc:
+            last_error = exc
             if attempt < 2:
                 time.sleep(0.75 * (attempt + 1))
 
     return json.dumps({
-    "error":"LLM call failed",
-    "details":repr(e)
-})
+        "error": "LLM call failed",
+        "details": repr(last_error)
+    })

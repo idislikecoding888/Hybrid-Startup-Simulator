@@ -10,41 +10,42 @@ class InvestorAgent(BaseAgent):
         )
 
     def build_prompt(self, state: SimulationState, context=None) -> str:
-        board_snapshot = ""
-        last_step_summary = ""
+        live_state_json = ""
+        last_step_summary_json = ""
+        debate_so_far = "[]"
+
         if context and isinstance(context, dict):
-            board_snapshot = context.get("board_snapshot", "")
-            last_step_summary = context.get("last_step_summary", "")
+            live_state_json = context.get("live_state_json", "")
+            last_step_summary_json = context.get("last_step_summary_json", "")
+            debate_so_far = context.get("debate_so_far", []) or []
+            debate_so_far = __import__("json").dumps(debate_so_far, ensure_ascii=False)
 
         return f"""
-You are the Investor / Board Partner of the startup.
+You are the Investor / Board Partner in a live startup board meeting.
 
-You are not here to be polite. You care about runway, burn, sustainability, risk, and whether this company deserves more capital.
-Speak like a real investor in a board meeting: skeptical, sharp, and focused on capital protection.
-Your reasoning should sound like an actual board discussion, not a template response.
+You are skeptical, sharp, and focused on capital protection.
+You care about runway, burn, sustainability, and whether the company deserves more capital.
+Speak like a real investor challenging the room, not like a chatbot.
 
-IMPORTANT STATE RULES:
-- Use ONLY the current board snapshot below.
+GROUNDED INPUTS:
+LIVE_STATE_JSON = {live_state_json}
+LAST_STEP_SUMMARY_JSON = {last_step_summary_json}
+DEBATE_SO_FAR_JSON = {debate_so_far}
+
+Rules:
+- Use only the values in LIVE_STATE_JSON and LAST_STEP_SUMMARY_JSON.
 - Do NOT repeat stale launch-state assumptions.
-- Do NOT claim revenue is zero, cash is $10k, or customers are 100 unless the snapshot actually says so.
-- Challenge the company using the real numbers you see here.
-
-Board Snapshot:
-{board_snapshot}
-
-{last_step_summary}
+- Do NOT say revenue is zero or cash is $10k unless the live state actually says that.
+- If you challenge a founder or marketing claim, refer to the exact current numbers.
+- Mention at least two exact current numbers from LIVE_STATE_JSON.
+- If the plan looks risky, say so clearly.
+- If the company looks healthy, explain why the risk is acceptable.
 
 Evaluate:
 - Is spending efficient?
 - Is growth sustainable?
 - Is cash at risk?
-- Is the company acting like adults or chasing vanity growth?
-
-Reasoning style:
-- Mention at least two exact current numbers from the snapshot.
-- If the plan looks risky, say so clearly.
-- If the company looks healthy, explain why the risk is acceptable.
-- Push back on one likely argument from the founder or marketing lead.
+- Is the company making adult decisions or chasing vanity growth?
 
 Return ONLY JSON in this format:
 {{

@@ -10,39 +10,39 @@ class MarketingAgent(BaseAgent):
         )
 
     def build_prompt(self, state: SimulationState, context=None) -> str:
-        board_snapshot = ""
-        last_step_summary = ""
+        live_state_json = ""
+        last_step_summary_json = ""
+        debate_so_far = "[]"
+
         if context and isinstance(context, dict):
-            board_snapshot = context.get("board_snapshot", "")
-            last_step_summary = context.get("last_step_summary", "")
+            live_state_json = context.get("live_state_json", "")
+            last_step_summary_json = context.get("last_step_summary_json", "")
+            debate_so_far = context.get("debate_so_far", []) or []
+            debate_so_far = __import__("json").dumps(debate_so_far, ensure_ascii=False)
 
         return f"""
-You are the Marketing Head / Growth Lead of a startup.
+You are the Marketing Head / Growth Lead in a live startup board meeting.
 
-You are speaking in a boardroom, not writing a report.
-Your job is to fight for growth, defend spend when it makes sense, and push back when cash is being wasted.
-Sound like a real growth leader: sharp, practical, slightly persuasive, and grounded in numbers.
+Act like a real growth leader: sharp, practical, persuasive, and slightly combative when needed.
+Do not sound like a template. Do not reuse stale examples. Respond to the current board discussion.
 
-IMPORTANT STATE RULES:
-- Use ONLY the current board snapshot below.
-- Do NOT reuse older example numbers or pretend the company is at launch unless the snapshot says so.
+GROUNDED INPUTS:
+LIVE_STATE_JSON = {live_state_json}
+LAST_STEP_SUMMARY_JSON = {last_step_summary_json}
+DEBATE_SO_FAR_JSON = {debate_so_far}
+
+Rules:
+- Use only the values in LIVE_STATE_JSON and LAST_STEP_SUMMARY_JSON.
 - Do NOT invent CAC, revenue, or cash figures.
-- Any claim about growth must be tied to the current state.
-
-Board Snapshot:
-{board_snapshot}
-
-{last_step_summary}
+- If you mention current budget, reach, conversion, customers, or cash, they must match LIVE_STATE_JSON exactly.
+- If earlier agents made a claim you disagree with, push back in your reasoning.
+- Mention at least two exact current numbers from LIVE_STATE_JSON.
+- If conversion is strong, argue for more spend.
+- If cash is tight or efficiency is poor, argue for discipline.
+- Sound like a growth operator defending budget in front of the board.
 
 Decision focus:
 - marketing_budget (0 to available cash)
-
-Reasoning style:
-- Mention at least two current numbers exactly.
-- If conversion is strong, argue for more spend.
-- If CAC is bad or cash is tight, argue for discipline.
-- Explain the tradeoff between growth and efficiency like a real person defending a budget.
-- Briefly anticipate a pushback from the founder or investor.
 
 Return ONLY JSON in this format:
 {{
