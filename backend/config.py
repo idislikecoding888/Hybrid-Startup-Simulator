@@ -24,9 +24,18 @@ class Settings:
 
     # Groq LLM config
     LLM_PROVIDER = "groq"
-    MODEL_NAME = "groq/compound"   # ✅ active Groq model
+    # FIX: "groq/compound" is Groq's agentic/tool-using *system* model — a
+    # single chat.completions.create() call to it can internally trigger many
+    # sub-calls (web search, code execution, secondary reasoning passes).
+    # That is the actual source of the 80-100+ calls per step and of the
+    # intermittent "LLM call failed" errors (extra internal hops = more
+    # surface area for timeouts/rate limits). Swapping to a plain, non-agentic
+    # chat model makes each agent.run() correspond to exactly one real API
+    # call, restoring the expected ~4 calls/step (max 12 with retries).
+    MODEL_NAME = "llama-3.1-8b-instant"
     TEMPERATURE = 0.7
     MAX_TOKENS = 1024
+    REQUEST_TIMEOUT_SECONDS = 30
 
     # Hybrid LLM + PPO weighting layer
     HYBRID_PPO_ENABLED = True          # if False, weighting.py always uses equal weights

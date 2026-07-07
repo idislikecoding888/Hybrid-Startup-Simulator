@@ -179,19 +179,48 @@ def _proposal_feasibility(output: Dict, state) -> float:
     return _clip01(score)
 
 
-def _score_output(output: Dict, reference_decision: Optional[Dict], state, agent_reputation: Optional[Dict[str, float]]) -> Dict:
+def _score_output(
+    output: Dict,
+    reference_decision: Optional[Dict],
+    state,
+    agent_reputation: Optional[Dict[str, float]],
+    agent_stats=None,
+) -> Dict:
     agent_name = output.get("agent")
     confidence = _agent_confidence(output)
     feasibility = _proposal_feasibility(output, state)
     reputation = _reputation_score(agent_name, agent_reputation)
+    stats = (agent_stats or {}).get(agent_name, {})
+
+    historical_reward = _clip01(
+        stats.get("average_reward", 0.5)
+    )
+
+    historical_success = min(
+        stats.get("successful_decisions", 0) / 10.0,
+        1.0,
+    )
 
     if reference_decision is None or not getattr(settings, "HYBRID_PPO_ENABLED", True):
         alignment = 0.5
-        utility = 0.45 * confidence + 0.35 * feasibility + 0.20 * reputation
+        utility = (
+            0.34 * confidence
+            + 0.28 * feasibility
+            + 0.18 * reputation
+            + 0.12 * historical_reward
+            + 0.08 * historical_success
+        )
     else:
         alignment_fn = _ALIGNMENT_FUNCS.get(agent_name)
         alignment = alignment_fn(output, reference_decision, state) if alignment_fn else 0.5
-        utility = 0.35 * alignment + 0.25 * confidence + 0.20 * feasibility + 0.20 * reputation
+        utility = (
+            0.28 * alignment
+            + 0.20 * confidence
+            + 0.18 * feasibility
+            + 0.16 * reputation
+            + 0.10 * historical_reward
+            + 0.08 * historical_success
+        )
 
     if agent_name == "founder" and state.customers.satisfaction < 0.7:
         utility += 0.03
@@ -227,6 +256,7 @@ def rank_agent_proposals(
     reference_decision: Optional[Dict],
     state,
     agent_reputation: Optional[Dict[str, float]] = None,
+    agent_stats=None,
 ) -> List[Dict]:
     """
     Returns a ranked list of proposal metadata objects sorted by utility.
@@ -237,7 +267,13 @@ def rank_agent_proposals(
         return []
 
     ranked = [
-        _score_output(output, reference_decision, state, agent_reputation)
+        _score_output(
+            output,
+            reference_decision,
+            state,
+            agent_reputation,
+            agent_stats,
+        )
         for output in usable
     ]
     ranked.sort(key=lambda x: x["utility"], reverse=True)
@@ -254,6 +290,7 @@ def compute_agent_weights(
     reference_decision: Optional[Dict],
     state,
     agent_reputation: Optional[Dict[str, float]] = None,
+    agent_stats=None,
 ) -> Dict[str, float]:
     """
     Returns {agent_name: weight}, weights sum to 1.
@@ -277,6 +314,7 @@ def compute_agent_weights(
         reference_decision,
         state,
         agent_reputation=agent_reputation,
+        agent_stats=agent_stats,
     )
     if not ranked:
         return {}

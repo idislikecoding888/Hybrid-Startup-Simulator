@@ -1,5 +1,3 @@
-# backend/engine/step_executor.py
-
 from backend.environment.market_model import apply_market_dynamics
 from backend.metrics.metrics_engine import compute_metrics
 from backend.hybrid.reward import compute_reward
@@ -12,7 +10,6 @@ class StepExecutor:
         self._logs_repo = LogsRepository()
 
     def _store_agent_decisions(self, state, deliberation_output):
-        
         """
         Persist the latest agent proposals into state.decisions so the UI
         and history can inspect them later.
@@ -36,27 +33,54 @@ class StepExecutor:
         state.decisions.last_founder_decision = agent_map.get("founder", {})
         state.decisions.last_marketing_decision = agent_map.get("marketing", {})
         state.decisions.last_investor_decision = agent_map.get("investor", {})
-    def _update_hybrid_reputation(self, state):
-            """
-            Update reputation after the completed step has been recorded.
-            Tries a few likely locations for the hybrid engine so this stays
-            robust across wrapper/service layouts.
-            """
-            candidates = [
-                self.deliberation_service,
-                getattr(self.deliberation_service, "engine", None),
-                getattr(self.deliberation_service, "hybrid_engine", None),
-                getattr(self.deliberation_service, "deliberation_engine", None),
-            ]
 
-            for candidate in candidates:
-                updater = getattr(candidate, "_update_reputation_from_previous_step", None)
-                if callable(updater):
-                    try:
-                        updater(state)
-                    except Exception:
-                        pass
-                    return
+    def _update_hybrid_reputation(self, state):
+        """
+        Update reputation after the completed step has been recorded.
+        Tries a few likely locations for the hybrid engine so this stays
+        robust across wrapper/service layouts.
+        """
+        candidates = [
+            self.deliberation_service,
+            getattr(self.deliberation_service, "engine", None),
+            getattr(self.deliberation_service, "hybrid_engine", None),
+            getattr(self.deliberation_service, "deliberation_engine", None),
+        ]
+
+        for candidate in candidates:
+            updater = getattr(candidate, "_update_reputation_from_previous_step", None)
+            if callable(updater):
+                try:
+                    updater(state)
+                except Exception:
+                    pass
+                return
+
+    def _update_ppo_learning(self, prev_snapshot, decision, reward_total, new_state, deliberation_output, metrics):
+        """
+        Feed the completed transition into the PPO adapter's lightweight
+        online learning layer.
+        """
+        engine = getattr(self.deliberation_service, "engine", None)
+        ppo = getattr(engine, "ppo", None)
+        if ppo is None:
+            return
+
+        try:
+            ppo.record_transition(
+                prev_snapshot,
+                decision,
+                reward_total,
+                new_state,
+                info={
+                    "step": new_state.step,
+                    "metrics": metrics,
+                    "selected_agent": deliberation_output.get("selected_agent"),
+                },
+            )
+            ppo.maybe_learn()
+        except Exception:
+            pass
 
     def execute_step(self, state):
         """
@@ -106,10 +130,21 @@ class StepExecutor:
                 "ppo_value_estimate": deliberation_output.get("ppo_value_estimate"),
             },
         })
-            # 7. Update hybrid memory/reputation after the step is fully recorded
+
+        # 7. Update hybrid memory/reputation after the step is fully recorded
         self._update_hybrid_reputation(new_state)
 
-            # 8. Increment step
+        # 8. Feed transition to PPO online learning
+        self._update_ppo_learning(
+            prev_snapshot,
+            decision,
+            reward["total"],
+            new_state,
+            deliberation_output,
+            metrics,
+        )
+
+        # 9. Increment step
         new_state.step += 1
 
         return new_state, deliberation_output, metrics

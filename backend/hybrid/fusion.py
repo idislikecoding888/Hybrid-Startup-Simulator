@@ -246,6 +246,7 @@ def fuse_decision(
     state,
     reference_decision=None,
     ppo_value_estimate=None,
+    agent_stats=None,
 ):
     candidates = []
 
@@ -272,12 +273,59 @@ def fuse_decision(
             weights.get(agent, 0),
         )
 
+        stats = (agent_stats or {}).get(agent, {})
+
+        historical_success = stats.get("successful_decisions", 0)
+        historical_average = stats.get("average_reward", 0.5)
+
+        history_factor = (
+            0.75
+            + 0.10 * min(historical_success / 10.0, 1.0)
+            + 0.15 * historical_average
+        )
+
+        utility *= history_factor
+
         candidates.append({
             "agent": agent,
             "decision": candidate,
             "utility": utility,
             "reasoning": output.get("reasoning", ""),
         })
+
+        ppo_alignment = 1.0
+
+        if reference_decision:
+
+            decision = STRATEGIES[agent](state, proposal)
+
+            price_diff = abs(
+                decision["price"] -
+                reference_decision["price"]
+            ) / PRICE_RANGE[1]
+
+            quality_diff = abs(
+                decision["quality"] -
+                reference_decision["quality"]
+            )
+
+            marketing_diff = abs(
+                decision["marketing_budget"] -
+                reference_decision["marketing_budget"]
+            ) / MARKETING_RANGE[1]
+
+            disagreement = (
+                price_diff +
+                quality_diff +
+                marketing_diff
+            ) / 3.0
+
+            ppo_alignment = max(
+                0.60,
+                1.0 - disagreement
+            )
+
+        utility *= ppo_alignment
 
     if not candidates:
         return {

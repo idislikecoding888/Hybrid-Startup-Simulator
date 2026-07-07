@@ -248,12 +248,14 @@ class HybridDeliberationEngine:
             reference_decision,
             state,
             agent_reputation=self.agent_reputation,
+            agent_stats=self.agent_stats,
         )
         weights = compute_agent_weights(
             agent_outputs,
             reference_decision,
             state,
             agent_reputation=self.agent_reputation,
+            agent_stats=self.agent_stats,
         )
 
         final_decision = fuse_decision(
@@ -262,6 +264,7 @@ class HybridDeliberationEngine:
             state=state,
             reference_decision=reference_decision,
             ppo_value_estimate=ppo_value,
+            agent_stats=self.agent_stats,
         )
 
         reasoning_parts = [
@@ -282,4 +285,5 @@ class HybridDeliberationEngine:
             "weights": weights,
             "final_decision": final_decision,
             "reasoning": " | ".join(reasoning_parts),
+            "ppo_learning": self.ppo.learning_summary(),
         }
