@@ -95,6 +95,25 @@ def _customer_alignment(output: Dict, ref: Dict) -> float:
     err = abs(float(feedback) - predicted)
     return 1.0 - min(err, 1.0)
 
+def _debate_consensus_score(utilities: np.ndarray, idx: int) -> float:
+    """
+    Measures how close one proposal is to the board's current center.
+    Higher = better consensus / easier to explain.
+    """
+    if utilities.size <= 1:
+        return 0.75
+
+    current = float(utilities[idx])
+    others = np.delete(utilities, idx)
+    if others.size == 0:
+        return 0.75
+
+    mean_other = float(others.mean())
+    spread = abs(current - mean_other)
+
+    # Smaller spread => stronger consensus.
+    return _clip01(1.0 - min(spread * 1.65, 1.0))
+
 
 _ALIGNMENT_FUNCS = {
     "founder": lambda out, ref, state: _founder_alignment(out, ref),
@@ -261,6 +280,8 @@ def rank_agent_proposals(
     """
     Returns a ranked list of proposal metadata objects sorted by utility.
     The top-ranked proposal is marked selected=True.
+
+    Sprint 3.3 adds debate_score / consensus_score for explainability.
     """
     usable = [o for o in agent_outputs if _has_usable_proposal(o)]
     if not usable:
@@ -278,7 +299,31 @@ def rank_agent_proposals(
     ]
     ranked.sort(key=lambda x: x["utility"], reverse=True)
 
+    utilities = np.array([item["utility"] for item in ranked], dtype=np.float64)
+    board_balance = (
+        _clip01(1.0 - min(float(utilities.std()) * 1.6, 1.0))
+        if len(utilities) > 1
+        else 0.75
+    )
+
     for idx, item in enumerate(ranked):
+        consensus = _debate_consensus_score(utilities, idx)
+        item["consensus_score"] = float(consensus)
+        item["board_balance"] = float(board_balance)
+
+        # A light explainability layer; does not change the core utility logic.
+        item["debate_score"] = float(_clip01(
+            0.52 * item["utility"]
+            + 0.18 * item["confidence"]
+            + 0.15 * item["reputation"]
+            + 0.15 * consensus
+        ))
+
+        item["selection_reason"] = (
+            f"{item['selection_reason']}, "
+            f"debate={item['debate_score']:.3f} "
+            f"(consensus={consensus:.3f}, board_balance={board_balance:.3f})"
+        )
         item["rank"] = idx + 1
         item["selected"] = idx == 0
 
@@ -297,6 +342,8 @@ def compute_agent_weights(
 
     - If PPO is unavailable, falls back to equal weights across surviving agents.
     - If no usable proposals exist, returns {}.
+
+    Sprint 3.3 uses debate_score as the soft weighting signal on top of utility.
     """
     usable = [o for o in agent_outputs if _has_usable_proposal(o)]
     if not usable:
@@ -319,7 +366,8 @@ def compute_agent_weights(
     if not ranked:
         return {}
 
-    scores = np.array([item["utility"] for item in ranked], dtype=np.float64)
+    # Debate score is a consensus-aware refinement of utility.
+    scores = np.array([item.get("debate_score", item["utility"]) for item in ranked], dtype=np.float64)
 
     logits = scores / TEMPERATURE
     logits -= logits.max()

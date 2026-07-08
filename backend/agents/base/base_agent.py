@@ -16,6 +16,36 @@ class BaseAgent(ABC):
         Main entry point for agent execution.
         """
         prompt = self.build_prompt(state, context)
+
+        # If the caller attached this agent's own memory block to the
+        # context (see HybridDeliberationEngine._run_agents), prepend it to
+        # the existing prompt. This reuses the same single LLM call below -
+        # no extra API calls are introduced.
+        memory_block = ""
+        if context and isinstance(context, dict):
+            memory_block = context.get("agent_memory_block", "") or ""
+
+        if memory_block:
+
+            instruction = """
+        You are participating in a long-running startup simulation.
+
+        The memory below contains ONLY your own previous decisions and outcomes.
+
+        Treat it as your personal experience.
+
+        Learn from strategies that produced higher rewards.
+
+        Avoid repeating strategies that repeatedly resulted in poor outcomes.
+
+        Use this memory to improve your next proposal, but still prioritize the CURRENT simulation state over older memories.
+
+        ------------------------------------------------------------
+
+        """
+
+            prompt = instruction + memory_block + prompt
+
         response = self.call_llm(prompt)
         parsed = self.parse_response(response)
         return parsed

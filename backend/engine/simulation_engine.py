@@ -18,6 +18,14 @@ class SimulationEngine:
     def reset(self):
         self.state = initialize_state()
 
+        # Also reset per-agent memory (isolated Founder/Marketing/Investor/
+        # Customer histories) so it doesn't leak across simulation resets.
+        deliberation_service = getattr(self.executor, "deliberation_service", None)
+        hybrid_engine = getattr(deliberation_service, "engine", None)
+        reset_memory = getattr(hybrid_engine, "reset_memory", None)
+        if callable(reset_memory):
+            reset_memory()
+
     def run(self, steps: int = None):
         if steps is None:
             steps = settings.MAX_STEPS

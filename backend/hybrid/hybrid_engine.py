@@ -5,6 +5,7 @@ from typing import Dict, List, Optional
 from backend.hybrid.ppo_adapter import PPOAdapter
 from backend.hybrid.weighting import compute_agent_weights, rank_agent_proposals
 from backend.hybrid.fusion import fuse_decision
+from backend.agents.base.memory import AgentMemoryManager
 
 
 def _clamp01(x: float) -> float:
@@ -37,6 +38,11 @@ class HybridDeliberationEngine:
             }
             for name in self.agent_reputation
         }
+
+        # Per-agent memory (isolated, latest-8, auto-summarized). This does
+        # not add any LLM calls - it only supplies a text block that gets
+        # prepended to each agent's existing single prompt/LLM call.
+        self.agent_memory = AgentMemoryManager(agent_names=list(self.agent_reputation.keys()))
 
     def _ensure_agent(self, name: str) -> None:
         if name not in self.agent_reputation:
@@ -78,6 +84,8 @@ class HybridDeliberationEngine:
             if isinstance(item, dict) and item.get("agent"):
                 ranked_map[item["agent"]] = item
 
+        step_number = latest_history.get("step")
+
         for agent_name in list(self.agent_reputation.keys()):
             self._ensure_agent(agent_name)
 
@@ -107,6 +115,121 @@ class HybridDeliberationEngine:
 
             if agent_name == selected_agent and reward_val >= 0.75:
                 stats["successful_decisions"] += 1
+
+            # Record this step's outcome into the agent's own isolated
+            # memory (latest 8 entries, older ones auto-summarized).
+            is_selected = agent_name == selected_agent
+            lesson = None
+            utility = item.get("utility") if item else None
+            if is_selected and reward_val >= 0.6:
+                lesson = "Being selected with this proposal led to a strong outcome."
+            elif is_selected:
+                lesson = "This proposal was selected but the outcome was only modest."
+            elif utility is not None and utility < 0.4:
+                lesson = "Low utility this round; align proposals more closely with current state."
+            elif utility is not None:
+                lesson = "Solid proposal, but another agent's plan was favored this round."
+
+            self.agent_memory.add_entry(
+                agent_name,
+                step=step_number,
+                proposal=item.get("proposal", {}) if item else {},
+                selected=is_selected,
+                reward=reward_val,
+                reputation=updated_rep,
+                trust_score=updated_rep,
+                lesson=lesson,
+            )
+
+    def reset_memory(self) -> None:
+        """Clears all agents' memory. Called on /simulation/reset."""
+        self.agent_memory.reset_all()
+
+    def _format_debate_turn(self, item: Dict) -> str:
+        agent = item.get("agent", "unknown")
+        proposal = item.get("proposal", {}) or {}
+        reasoning = (item.get("reasoning") or "").strip()
+        error = item.get("error")
+
+        if agent == "founder":
+            summary = (
+                f"price={proposal.get('price')}, "
+                f"quality={proposal.get('quality')}, "
+                f"confidence={proposal.get('confidence')}"
+            )
+        elif agent == "marketing":
+            summary = (
+                f"marketing_budget={proposal.get('marketing_budget')}, "
+                f"confidence={proposal.get('confidence')}"
+            )
+        elif agent == "investor":
+            summary = (
+                f"approve={proposal.get('approve')}, "
+                f"risk_level={proposal.get('risk_level')}, "
+                f"confidence={proposal.get('confidence')}"
+            )
+        elif agent == "customer":
+            summary = (
+                f"sentiment={proposal.get('sentiment')}, "
+                f"feedback_score={proposal.get('feedback_score')}, "
+                f"confidence={proposal.get('confidence')}"
+            )
+        else:
+            summary = json.dumps(proposal, ensure_ascii=False)
+
+        return (
+            f"{agent}: {summary} | "
+            f"status={'error' if error else 'ok'} | "
+            f"reasoning={reasoning}"
+        )
+
+
+    def _build_debate_synthesis(
+        self,
+        proposal_ranking: List[Dict],
+        reference_decision: Optional[Dict],
+        ppo_value: Optional[float],
+    ) -> str:
+        if not proposal_ranking:
+            return "No usable proposals were produced."
+
+        top = proposal_ranking[0]
+        runner_up = proposal_ranking[1] if len(proposal_ranking) > 1 else None
+        strongest_counter = proposal_ranking[-1]
+
+        lines = [
+            (
+                f"Selected {top['agent']} because it achieved the strongest combined "
+                f"utility ({top.get('utility', 0.0):.3f}), debate score "
+                f"({top.get('debate_score', top.get('utility', 0.0)):.3f}), and "
+                f"trust ({top.get('reputation', 0.0):.3f})."
+            )
+        ]
+
+        if runner_up:
+            gap = float(top.get("utility", 0.0)) - float(runner_up.get("utility", 0.0))
+            lines.append(
+                f"The closest alternative was {runner_up['agent']}, showing a real "
+                f"trade-off with a utility gap of {gap:.3f}."
+            )
+
+        lines.append(
+            f"Strongest counterpoint came from {strongest_counter['agent']} with "
+            f"utility {strongest_counter.get('utility', 0.0):.3f} and debate score "
+            f"{strongest_counter.get('debate_score', strongest_counter.get('utility', 0.0)):.3f}."
+        )
+
+        if reference_decision:
+            lines.append(
+                f"PPO guidance suggested price={reference_decision['price']:.1f}, "
+                f"quality={reference_decision['quality']:.3f}, "
+                f"marketing_budget={reference_decision['marketing_budget']:.1f}."
+            )
+
+        if ppo_value is not None:
+            lines.append(f"PPO value estimate={float(ppo_value):.3f}.")
+
+        return " ".join(lines)
 
     def _build_context(self, state, debate_so_far=None) -> Dict:
         latest_history = state.history[-1] if getattr(state, "history", None) else {}
@@ -165,14 +288,13 @@ class HybridDeliberationEngine:
         ])
 
         debate_so_far = debate_so_far or []
-        debate_lines = []
+        debate_lines = [
+            "DEBATE CONTEXT (respond directly to prior board arguments):",
+            "Say what you agree with, what you disagree with, and why.",
+            "Address at least one supporting point and one objection in your reasoning.",
+        ]
         for item in debate_so_far[-3:]:
-            debate_lines.append(
-                f"{item.get('agent', 'unknown')}: "
-                f"proposal={json.dumps(item.get('proposal', {}), ensure_ascii=False)} | "
-                f"reasoning={item.get('reasoning', '')} | "
-                f"error={item.get('error')}"
-            )
+            debate_lines.append(self._format_debate_turn(item))
         debate_summary = "\n".join(debate_lines)
 
         return {
@@ -193,6 +315,7 @@ class HybridDeliberationEngine:
             "agent_stats": deepcopy(self.agent_stats),
             "current_step": state.step,
         }
+    
 
     def _run_agents(self, state) -> List[Dict]:
         outputs = []
@@ -200,6 +323,10 @@ class HybridDeliberationEngine:
 
         for agent in self.agents:
             context = self._build_context(state, debate_so_far=debate_so_far)
+            # Attach this agent's own memory (isolated per agent name) so
+            # BaseAgent.run() can prepend it to the existing prompt before
+            # the existing single LLM call.
+            context["agent_memory_block"] = self.agent_memory.get_prompt_block(agent.name)
             try:
                 result = agent.run(state, context=context)
                 if not isinstance(result, dict):
@@ -267,8 +394,20 @@ class HybridDeliberationEngine:
             agent_stats=self.agent_stats,
         )
 
+        ranking_by_agent = {item["agent"]: item for item in proposal_ranking}
+        debate_synthesis = self._build_debate_synthesis(
+            proposal_ranking=proposal_ranking,
+            reference_decision=reference_decision,
+            ppo_value=ppo_value,
+        )
+
         reasoning_parts = [
-            f"{o['agent']}({weights.get(o['agent'], 0.0):.2f}): {o.get('reasoning', '')}"
+            (
+                f"{o['agent']}({weights.get(o['agent'], 0.0):.2f}, "
+                f"util={ranking_by_agent.get(o['agent'], {}).get('utility', 0.0):.2f}, "
+                f"debate={ranking_by_agent.get(o['agent'], {}).get('debate_score', ranking_by_agent.get(o['agent'], {}).get('utility', 0.0)):.2f}): "
+                f"{o.get('reasoning', '')}"
+            )
             for o in agent_outputs
             if o["agent"] in weights
         ]
@@ -286,4 +425,7 @@ class HybridDeliberationEngine:
             "final_decision": final_decision,
             "reasoning": " | ".join(reasoning_parts),
             "ppo_learning": self.ppo.learning_summary(),
+            "agent_memory": self.agent_memory.diagnostics(),
+            "debate_synthesis": debate_synthesis,
+            "debate_consensus": proposal_ranking[0].get("consensus_score") if proposal_ranking else None,
         }
